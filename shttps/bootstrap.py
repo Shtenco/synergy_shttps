@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os
+import os,time
 from dataclasses import dataclass
 
 from .compression import AICompressAdapter
@@ -8,6 +8,7 @@ from .credentials import load_identity, load_trust_store
 from .crypto.oqs_provider import OQSProvider
 from .errors import ProviderUnavailable, SecurityError
 from .federation import FederationRegistry, load_verified_registry
+from .federation_delegate import load_verified_delegated_registry
 from .handshake import HandshakeConfig, Identity, PinnedTrustStore
 from .rpc import RPCDispatcher
 from .transport import SHTTPSRPCClient, SHTTPSRPCServer
@@ -38,7 +39,12 @@ def production_context(prefix: str, *, roles: tuple[str,...]=()) -> ProductionCo
     federation: FederationRegistry | None=None
     if registry_path or root_path:
         if not registry_path or not root_path or not repository_name: raise ProviderUnavailable(f"{prefix}: federation registry/root/repository must be configured together")
-        federation=load_verified_registry(provider,root_path,registry_path,state_path=state_path); federation.assert_local_identity(repository_name,identity); trust=federation.trust_store()
+        signer_revocations_path=os.getenv(f"{prefix}_SHTTPS_FEDERATION_SIGNER_REVOCATIONS","") or None
+        if signer_revocations_path:
+            federation=load_verified_delegated_registry(provider,root_path,registry_path,signer_revocations_path,state_path=state_path,now=int(time.time()))
+        else:
+            federation=load_verified_registry(provider,root_path,registry_path,state_path=state_path)
+        federation.assert_local_identity(repository_name,identity); trust=federation.trust_store()
     else:
         if not _bool(f"{prefix}_SHTTPS_ALLOW_LEGACY_TRUST",False): raise ProviderUnavailable(f"{prefix}: signed Federation Trust Registry is required")
         trust_path=os.getenv(f"{prefix}_SHTTPS_TRUST","")
