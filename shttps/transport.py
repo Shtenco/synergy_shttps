@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import struct
-from typing import Any
+from typing import Any, Iterable
 
 from .canonical import canonical_json
 from .compression import AICompressAdapter
@@ -14,9 +15,11 @@ from .errors import ProtocolError, SecurityError
 from .handshake import HandshakeConfig, Identity, PinnedTrustStore, accept_client, finish_client, finish_server, make_session, start_client, verify_server_finish
 from .protocol import open_envelope, seal_envelope
 from .rpc import RPC_PROTOCOL, RPCDispatcher, RPCRequest, RPCResponse
+from .federation import FederationRegistry
 
 _LEN = struct.Struct(">I")
 _MAX_PACKET = MAX_FRAME_BYTES + 1024 * 1024
+
 
 async def _read_packet(reader: asyncio.StreamReader, *, limit: int) -> bytes:
     raw = await reader.readexactly(_LEN.size)
@@ -25,11 +28,13 @@ async def _read_packet(reader: asyncio.StreamReader, *, limit: int) -> bytes:
         raise ProtocolError("SHTTPS packet size outside limit")
     return await reader.readexactly(size)
 
+
 async def _write_packet(writer: asyncio.StreamWriter, data: bytes, *, limit: int) -> None:
     if not data or len(data) > limit:
         raise ProtocolError("SHTTPS packet size outside limit")
     writer.write(_LEN.pack(len(data)) + data)
     await writer.drain()
+
 
 def _json_packet(data: bytes) -> dict:
     try:
@@ -40,10 +45,21 @@ def _json_packet(data: bytes) -> dict:
         raise ProtocolError("handshake packet must be object")
     return value
 
+
+@dataclass(frozen=True)
+class PeerContext:
+    peer_node_id: str
+    local_node_id: str
+    peer_roles: tuple[str, ...] = ()
+
+
 class SHTTPSRPCClient:
-    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, *, compression: AICompressAdapter | None = None, expected_peer_node_id: str | None = None, timeout: float = 15.0) -> None:
+    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, *, compression: AICompressAdapter | None = None, expected_peer_node_id: str | None = None, expected_peer_node_ids: Iterable[str] | None = None, timeout: float = 15.0) -> None:
         self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config
-        self.compression=compression or AICompressAdapter(); self.expected_peer_node_id=expected_peer_node_id; self.timeout=float(timeout)
+        self.compression=compression or AICompressAdapter()
+        expected=set(expected_peer_node_ids or ())
+        if expected_peer_node_id: expected.add(expected_peer_node_id)
+        self.expected_peer_node_ids=frozenset(expected); self.timeout=float(timeout)
 
     async def call(self, service: str, method: str, params: dict[str, Any], *, sensitive: bool=False, metadata: dict[str, Any] | None=None) -> Any:
         return await asyncio.wait_for(self._call(service, method, params, sensitive=sensitive, metadata=metadata), timeout=self.timeout)
@@ -53,7 +69,8 @@ class SHTTPSRPCClient:
         try:
             ch,state=start_client(self.provider,self.identity,self.config); await _write_packet(writer,canonical_json(ch),limit=MAX_HANDSHAKE_BYTES)
             sh=_json_packet(await _read_packet(reader,limit=MAX_HANDSHAKE_BYTES)); cf,secrets=finish_client(self.provider,state,self.trust,sh)
-            if self.expected_peer_node_id and secrets.peer_node_id != self.expected_peer_node_id: raise SecurityError("connected peer does not match expected node_id")
+            if self.expected_peer_node_ids and secrets.peer_node_id not in self.expected_peer_node_ids:
+                raise SecurityError("connected peer does not match expected federation node_id")
             await _write_packet(writer,canonical_json(cf),limit=MAX_HANDSHAKE_BYTES); sf=_json_packet(await _read_packet(reader,limit=MAX_HANDSHAKE_BYTES)); verify_server_finish(secrets,sf)
             session=make_session(secrets,"client",self.compression); request=RPCRequest(service=service,method=method,params=params,metadata=metadata or {})
             envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=secrets.peer_node_id,payload=request.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":"SHTTPS/1"})
@@ -75,9 +92,10 @@ class SHTTPSRPCClient:
         except RuntimeError: return asyncio.run(self.call(service,method,params,sensitive=sensitive,metadata=metadata))
         raise RuntimeError("call_sync cannot run inside an active event loop; use await call()")
 
+
 class SHTTPSRPCServer:
-    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, dispatcher: RPCDispatcher, *, compression: AICompressAdapter | None=None) -> None:
-        self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config; self.dispatcher=dispatcher; self.compression=compression or AICompressAdapter(); self._server=None
+    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, dispatcher: RPCDispatcher, *, compression: AICompressAdapter | None=None, federation: FederationRegistry | None=None) -> None:
+        self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config; self.dispatcher=dispatcher; self.compression=compression or AICompressAdapter(); self.federation=federation; self._server=None
 
     async def start(self) -> None: self._server=await asyncio.start_server(self._handle,self.host,self.port)
     async def serve_forever(self) -> None:
@@ -101,7 +119,13 @@ class SHTTPSRPCServer:
                 request=RPCRequest.decode(envelope.payload)
                 if envelope.correlation_id != request.request_id: raise SecurityError("RPC request correlation mismatch")
                 context={"peer_node_id":peer_node_id,"local_node_id":self.identity.node_id,"stream_id":header.stream_id,"transport":"SHTTPS/1","authenticated":True,"application_authority":False}
-                response=self.dispatcher.dispatch(request,context)
+                if self.federation is not None:
+                    try: context.update(self.federation.peer_context(peer_node_id))
+                    except SecurityError: response=RPCResponse(request.request_id,False,error="FEDERATION_NODE_NOT_REGISTERED")
+                    else:
+                        if not self.federation.authorize_rpc(peer_node_id,request.service,request.method): response=RPCResponse(request.request_id,False,error="FEDERATION_RPC_NOT_AUTHORIZED")
+                        else: response=self.dispatcher.dispatch(request,context)
+                else: response=self.dispatcher.dispatch(request,context)
                 response_envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=peer_node_id,payload=response.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":"SHTTPS/1"})
                 await _write_packet(writer,seal_envelope(session,response_envelope,stream_id=header.stream_id,sensitive=bool(header.flags & 2)),limit=_MAX_PACKET)
         except Exception:
