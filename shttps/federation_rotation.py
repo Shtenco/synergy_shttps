@@ -9,11 +9,9 @@ from .federation import ACTIVE, RETIRING, _all, _now, node_record, node_schemes_
 from .handshake import Identity
 
 
-def rotate_due_nodes(
+def build_due_registry_update(
     provider:PQProvider,
     signed:dict[str,Any],
-    root:dict[str,Any],
-    root_identity:Identity,
     secrets_dir:str|Path,
     *,
     now:int|None=None,
@@ -22,17 +20,12 @@ def rotate_due_nodes(
     registry_valid_seconds:int=86400*30,
     ttl_seconds:int=86400*90,
     grace_seconds:int=3600,
-)->tuple[dict[str,Any],list[str]]:
-    """Build one signed maintenance update for the federation registry.
+)->tuple[dict[str,Any]|None,list[str]]:
+    """Build an unsigned lifecycle-only registry update and pending node secrets.
 
-    Due node identities are rotated in one sequence. Even when no node is due, the
-    registry is renewed before its own expiry so a 30-day registry cannot expire
-    while 90-day node identities are still healthy.
-
-    New private material is written only as immutable generation files plus `.next`
-    candidates. The stable identity path is deliberately NOT changed here; callers
-    must publish the new signed registry first, then call promote_pending_identities.
-    This makes rotation crash-safe across the registry/secret publication boundary.
+    The caller chooses the signing authority: legacy root signing or delegated HSM
+    signing. Static governance metadata is copied unchanged; only node lifecycle,
+    timestamps, sequence, validity and hash-chain fields can change here.
     """
     body=copy.deepcopy(signed["registry"])
     ts=int(now or _now())
@@ -54,10 +47,9 @@ def rotate_due_nodes(
         principal.setdefault("nodes",[]).append(node_record(identity,generation=generation,not_before=ts,not_after=ts+int(ttl_seconds)))
         rotated.append(str(principal["name"]))
 
-    expires_at=int(body.get("expires_at",0))
-    renewal_due=expires_at<=ts+int(renew_before_seconds)
+    renewal_due=int(body.get("expires_at",0))<=ts+int(renew_before_seconds)
     if not rotated and not renewal_due:
-        return signed,[]
+        return None,[]
 
     body.update(
         sequence=int(body["sequence"])+1,
@@ -65,6 +57,33 @@ def rotate_due_nodes(
         expires_at=ts+int(registry_valid_seconds),
         previous_registry_hash=signed["registry_hash"],
     )
+    return body,rotated
+
+
+def rotate_due_nodes(
+    provider:PQProvider,
+    signed:dict[str,Any],
+    root:dict[str,Any],
+    root_identity:Identity,
+    secrets_dir:str|Path,
+    *,
+    now:int|None=None,
+    rotate_before_seconds:int=86400*7,
+    renew_before_seconds:int=86400*7,
+    registry_valid_seconds:int=86400*30,
+    ttl_seconds:int=86400*90,
+    grace_seconds:int=3600,
+)->tuple[dict[str,Any],list[str]]:
+    body,rotated=build_due_registry_update(
+        provider,signed,secrets_dir,now=now,
+        rotate_before_seconds=rotate_before_seconds,
+        renew_before_seconds=renew_before_seconds,
+        registry_valid_seconds=registry_valid_seconds,
+        ttl_seconds=ttl_seconds,
+        grace_seconds=grace_seconds,
+    )
+    if body is None:
+        return signed,[]
     return sign_registry(provider,root_identity,root,body),rotated
 
 
