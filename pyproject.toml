@@ -15,7 +15,7 @@ shttps-federation = "shttps.federation_cli:main"
 shttps-federation-rotate-due = "shttps.federation_rotate_due_cli:main"
 
 [project.optional-dependencies]
-pq = ["liboqs-python>=0.14"]
+pq = ["liboqs-python==0.16.0"]
 test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
