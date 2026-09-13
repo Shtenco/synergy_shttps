@@ -1,0 +1,25 @@
+{
+  "schema": "shttps.profile/v1",
+  "version": 1,
+  "authority": "TRANSPORT_NONE",
+  "pqc_policy_source": {
+    "repository": "Shtenco/synergy_ai_blockchain",
+    "branch": "feat/pq-evm-nexus-v1",
+    "commit": "01dbc0fa901c8195bc37c646fa6617ada2b97a99"
+  },
+  "compression_source": {
+    "repository": "Shtenco/ai_compress",
+    "commit": "551fae36eacb5713aa503fc9da2fbc44fe8f2e84",
+    "codec": "SGH1"
+  },
+  "required_kem": "ML-KEM-1024",
+  "identity_signature": "ML-DSA-87",
+  "max_identity_signature": "SLH-DSA-SHAKE-256s",
+  "optional_classical_kex": "X25519",
+  "kdf": "HKDF-SHA3-512",
+  "default_aead": "ChaCha20-Poly1305",
+  "alternate_aead": "AES-256-GCM",
+  "compression_profiles": ["SGH1-speed", "SGH1-balanced", "RAW"],
+  "rekey_after_messages": 1000000,
+  "rekey_after_seconds": 3600
+}
