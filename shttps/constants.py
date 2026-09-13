@@ -40,6 +40,7 @@ class FrameFlags(IntFlag):
     PADDED = 1 << 2
 
 DEFAULT_PROTOCOLS = (
+    "shttps.rpc/v1",
     "synergy.capability.v1",
     "nexus.runtime/v3",
     "nexus.memory/v1",
