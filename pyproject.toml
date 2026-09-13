@@ -12,6 +12,7 @@ dependencies = ["cryptography>=46"]
 [project.scripts]
 shttps-diagnose = "shttps.diagnostics:main"
 shttps-federation = "shttps.federation_cli:main"
+shttps-federation-rotate-due = "shttps.federation_rotate_due_cli:main"
 
 [project.optional-dependencies]
 pq = ["liboqs-python>=0.14"]
