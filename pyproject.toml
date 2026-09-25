@@ -16,6 +16,7 @@ shttps-federation-rotate-due = "shttps.federation_rotate_due_cli:main"
 shttps-federation-delegated = "shttps.delegated_cli:main"
 shttps-hsm-signer = "shttps.hsm_cli:main"
 synergy-mcp-gateway = "shttps.mcp_stdio:main"
+synergy-mcp-http-gateway = "shttps.mcp_http:main"
 synergy-remote-mcp-node = "shttps.remote_mcp_node:main"
 
 [project.optional-dependencies]
