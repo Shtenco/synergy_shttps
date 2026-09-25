@@ -18,6 +18,7 @@ shttps-hsm-signer = "shttps.hsm_cli:main"
 synergy-mcp-gateway = "shttps.mcp_stdio:main"
 synergy-mcp-http-gateway = "shttps.mcp_http:main"
 synergy-remote-mcp-node = "shttps.remote_mcp_node:main"
+synergy-remote-mcp-smoke = "shttps.remote_mcp_smoke:main"
 
 [project.optional-dependencies]
 pq = ["liboqs-python==0.16.0"]
