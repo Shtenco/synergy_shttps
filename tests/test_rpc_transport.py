@@ -28,3 +28,40 @@ def test_rpc_unknown_method_fails_closed():
             with pytest.raises(RuntimeError,match="RPC_METHOD_NOT_ALLOWED"): await client.call("x","y",{})
         finally: await server.close()
     asyncio.run(scenario())
+
+
+def test_end_to_end_remote_mcp_rpc_runs_inside_stcp_stream():
+    async def scenario():
+        p=FakePQProvider()
+        client_id=Identity.generate(p,(SIG_ML_DSA_87,))
+        server_id=Identity.generate(p,(SIG_ML_DSA_87,))
+        client_trust=PinnedTrustStore(); client_trust.pin(server_id)
+        server_trust=PinnedTrustStore(); server_trust.pin(client_id)
+        cfg=HandshakeConfig(protocols=("shttps.rpc/v1",))
+        d=RPCDispatcher()
+        d.register(
+            "synergy.remote.mcp.v1",
+            "health",
+            lambda params,ctx:{
+                "transport":ctx["transport"],
+                "authenticated":ctx["authenticated"],
+                "peer":ctx["peer_node_id"],
+            },
+        )
+        port=_free_port()
+        server=SHTTPSRPCServer(
+            "127.0.0.1",port,p,server_id,server_trust,cfg,d,stcp=True
+        )
+        await server.start()
+        try:
+            client=SHTTPSRPCClient(
+                "127.0.0.1",port,p,client_id,client_trust,cfg,
+                expected_peer_node_id=server_id.node_id,stcp=True
+            )
+            result=await client.call("synergy.remote.mcp.v1","health",{})
+            assert result["transport"]=="SHTTPS/2+STCP/1"
+            assert result["authenticated"] is True
+            assert result["peer"]==client_id.node_id
+        finally:
+            await server.close()
+    asyncio.run(scenario())
