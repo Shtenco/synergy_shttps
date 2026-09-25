@@ -72,9 +72,9 @@ def rpc_client_from_env(prefix: str, *, host_default: str, port_default: int, ro
     if expected_node:
         if expected_ids and expected_node not in expected_ids: raise ProviderUnavailable(f"{prefix}: explicit expected peer is not an accepted node of expected repository")
         expected_ids.add(expected_node)
-    return SHTTPSRPCClient(host,port,ctx.provider,ctx.identity,ctx.trust,ctx.config,compression=ctx.compression,expected_peer_node_ids=expected_ids,timeout=float(os.getenv(f"{prefix}_SHTTPS_TIMEOUT","15")))
+    return SHTTPSRPCClient(host,port,ctx.provider,ctx.identity,ctx.trust,ctx.config,compression=ctx.compression,expected_peer_node_ids=expected_ids,timeout=float(os.getenv(f"{prefix}_SHTTPS_TIMEOUT","15")),stcp=_bool(f"{prefix}_SHTTPS_STCP",False))
 
 
 def rpc_server_from_env(prefix: str, dispatcher: RPCDispatcher, *, host_default: str, port_default: int, roles: tuple[str,...]=()) -> SHTTPSRPCServer:
     ctx=production_context(prefix,roles=roles); host=os.getenv(f"{prefix}_SHTTPS_BIND_HOST",host_default); port=int(os.getenv(f"{prefix}_SHTTPS_BIND_PORT",str(port_default)))
-    return SHTTPSRPCServer(host,port,ctx.provider,ctx.identity,ctx.trust,ctx.config,dispatcher,compression=ctx.compression,federation=ctx.federation)
+    return SHTTPSRPCServer(host,port,ctx.provider,ctx.identity,ctx.trust,ctx.config,dispatcher,compression=ctx.compression,federation=ctx.federation,stcp=_bool(f"{prefix}_SHTTPS_STCP",False))
