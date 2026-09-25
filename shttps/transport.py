@@ -16,6 +16,7 @@ from .handshake import HandshakeConfig, Identity, PinnedTrustStore, accept_clien
 from .protocol import open_envelope, seal_envelope
 from .rpc import RPC_PROTOCOL, RPCDispatcher, RPCRequest, RPCResponse
 from .federation import FederationRegistry
+from .stcp import STCPMux, StreamClass
 
 _LEN = struct.Struct(">I")
 _MAX_PACKET = MAX_FRAME_BYTES + 1024 * 1024
@@ -54,12 +55,12 @@ class PeerContext:
 
 
 class SHTTPSRPCClient:
-    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, *, compression: AICompressAdapter | None = None, expected_peer_node_id: str | None = None, expected_peer_node_ids: Iterable[str] | None = None, timeout: float = 15.0) -> None:
+    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, *, compression: AICompressAdapter | None = None, expected_peer_node_id: str | None = None, expected_peer_node_ids: Iterable[str] | None = None, timeout: float = 15.0, stcp: bool = False) -> None:
         self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config
         self.compression=compression or AICompressAdapter()
         expected=set(expected_peer_node_ids or ())
         if expected_peer_node_id: expected.add(expected_peer_node_id)
-        self.expected_peer_node_ids=frozenset(expected); self.timeout=float(timeout)
+        self.expected_peer_node_ids=frozenset(expected); self.timeout=float(timeout); self.stcp=bool(stcp)
 
     async def call(self, service: str, method: str, params: dict[str, Any], *, sensitive: bool=False, metadata: dict[str, Any] | None=None) -> Any:
         return await asyncio.wait_for(self._call(service, method, params, sensitive=sensitive, metadata=metadata), timeout=self.timeout)
@@ -73,9 +74,21 @@ class SHTTPSRPCClient:
                 raise SecurityError("connected peer does not match expected federation node_id")
             await _write_packet(writer,canonical_json(cf),limit=MAX_HANDSHAKE_BYTES); sf=_json_packet(await _read_packet(reader,limit=MAX_HANDSHAKE_BYTES)); verify_server_finish(secrets,sf)
             session=make_session(secrets,"client",self.compression); request=RPCRequest(service=service,method=method,params=params,metadata=metadata or {})
-            envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=secrets.peer_node_id,payload=request.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":"SHTTPS/1"})
-            await _write_packet(writer,seal_envelope(session,envelope,stream_id=1,sensitive=sensitive),limit=_MAX_PACKET)
-            _,response_envelope=open_envelope(session,await _read_packet(reader,limit=_MAX_PACKET))
+            transport_label="SHTTPS/2+STCP/1" if self.stcp else "SHTTPS/1"
+            stream_class=StreamClass.MCP if service.startswith("synergy.remote.mcp") else StreamClass.RPC
+            envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=secrets.peer_node_id,payload=request.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":transport_label,"stcp_class":stream_class.name})
+            sealed=seal_envelope(session,envelope,stream_id=1,sensitive=sensitive)
+            tx_mux=STCPMux() if self.stcp else None
+            rx_mux=STCPMux() if self.stcp else None
+            outbound=tx_mux.wrap(stream_class,1,sealed) if tx_mux else sealed
+            await _write_packet(writer,outbound,limit=_MAX_PACKET)
+            inbound=await _read_packet(reader,limit=_MAX_PACKET)
+            if rx_mux:
+                stcp_response=rx_mux.unwrap(inbound)
+                if stcp_response.stream_class != stream_class or stcp_response.stream_id != 1:
+                    raise SecurityError("STCP response stream binding mismatch")
+                inbound=stcp_response.payload
+            _,response_envelope=open_envelope(session,inbound)
             if response_envelope.protocol != RPC_PROTOCOL: raise ProtocolError("unexpected response protocol")
             if response_envelope.destination != self.identity.node_id or response_envelope.source != secrets.peer_node_id: raise SecurityError("RPC response endpoint binding mismatch")
             response=RPCResponse.decode(response_envelope.payload)
@@ -94,8 +107,8 @@ class SHTTPSRPCClient:
 
 
 class SHTTPSRPCServer:
-    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, dispatcher: RPCDispatcher, *, compression: AICompressAdapter | None=None, federation: FederationRegistry | None=None) -> None:
-        self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config; self.dispatcher=dispatcher; self.compression=compression or AICompressAdapter(); self.federation=federation; self._server=None
+    def __init__(self, host: str, port: int, provider: PQProvider, identity: Identity, trust: PinnedTrustStore, config: HandshakeConfig, dispatcher: RPCDispatcher, *, compression: AICompressAdapter | None=None, federation: FederationRegistry | None=None, stcp: bool=False) -> None:
+        self.host=host; self.port=int(port); self.provider=provider; self.identity=identity; self.trust=trust; self.config=config; self.dispatcher=dispatcher; self.compression=compression or AICompressAdapter(); self.federation=federation; self.stcp=bool(stcp); self._server=None
 
     async def start(self) -> None: self._server=await asyncio.start_server(self._handle,self.host,self.port)
     async def serve_forever(self) -> None:
@@ -110,15 +123,22 @@ class SHTTPSRPCServer:
             ch=_json_packet(await _read_packet(reader,limit=MAX_HANDSHAKE_BYTES)); sh,state=accept_client(self.provider,self.identity,self.config,self.trust,ch); peer_node_id=str(ch.get("body",{}).get("node_id") or "")
             await _write_packet(writer,canonical_json(sh),limit=MAX_HANDSHAKE_BYTES); cf=_json_packet(await _read_packet(reader,limit=MAX_HANDSHAKE_BYTES)); sf,secrets=finish_server(self.provider,state,self.trust,cf); peer_node_id=secrets.peer_node_id
             await _write_packet(writer,canonical_json(sf),limit=MAX_HANDSHAKE_BYTES); session=make_session(secrets,"server",self.compression)
+            rx_mux=STCPMux() if self.stcp else None; tx_mux=STCPMux() if self.stcp else None
             while True:
                 try: frame=await _read_packet(reader,limit=_MAX_PACKET)
                 except asyncio.IncompleteReadError: break
+                outer=None
+                if rx_mux:
+                    outer=rx_mux.unwrap(frame); frame=outer.payload
                 header,envelope=open_envelope(session,frame)
                 if envelope.protocol != RPC_PROTOCOL: raise ProtocolError("only shttps.rpc/v1 accepted on RPC server")
                 if envelope.destination != self.identity.node_id or envelope.source != peer_node_id: raise SecurityError("RPC request endpoint binding mismatch")
                 request=RPCRequest.decode(envelope.payload)
                 if envelope.correlation_id != request.request_id: raise SecurityError("RPC request correlation mismatch")
-                context={"peer_node_id":peer_node_id,"local_node_id":self.identity.node_id,"stream_id":header.stream_id,"transport":"SHTTPS/1","authenticated":True,"application_authority":False}
+                expected_class=StreamClass.MCP if request.service.startswith("synergy.remote.mcp") else StreamClass.RPC
+                if outer is not None and (outer.stream_class != expected_class or outer.stream_id != header.stream_id): raise SecurityError("STCP request stream/application binding mismatch")
+                transport_label="SHTTPS/2+STCP/1" if self.stcp else "SHTTPS/1"
+                context={"peer_node_id":peer_node_id,"local_node_id":self.identity.node_id,"stream_id":header.stream_id,"transport":transport_label,"authenticated":True,"application_authority":False}
                 if self.federation is not None:
                     try: context.update(self.federation.peer_context(peer_node_id))
                     except SecurityError: response=RPCResponse(request.request_id,False,error="FEDERATION_NODE_NOT_REGISTERED")
@@ -126,8 +146,10 @@ class SHTTPSRPCServer:
                         if not self.federation.authorize_rpc(peer_node_id,request.service,request.method): response=RPCResponse(request.request_id,False,error="FEDERATION_RPC_NOT_AUTHORIZED")
                         else: response=self.dispatcher.dispatch(request,context)
                 else: response=self.dispatcher.dispatch(request,context)
-                response_envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=peer_node_id,payload=response.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":"SHTTPS/1"})
-                await _write_packet(writer,seal_envelope(session,response_envelope,stream_id=header.stream_id,sensitive=bool(header.flags & 2)),limit=_MAX_PACKET)
+                response_envelope=Envelope(protocol=RPC_PROTOCOL,source=self.identity.node_id,destination=peer_node_id,payload=response.encode(),content_type="application/json",correlation_id=request.request_id,metadata={"transport":transport_label,"stcp_class":expected_class.name})
+                sealed_response=seal_envelope(session,response_envelope,stream_id=header.stream_id,sensitive=bool(header.flags & 2))
+                outbound=tx_mux.wrap(expected_class,header.stream_id,sealed_response) if tx_mux else sealed_response
+                await _write_packet(writer,outbound,limit=_MAX_PACKET)
         except Exception:
             pass
         finally:
