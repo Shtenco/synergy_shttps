@@ -1,0 +1,32 @@
+{
+  "schema": "shttps.federation-source/v1",
+  "repositories": [
+    {
+      "name": "synergy_shttps",
+      "repo": "Shtenco/synergy_shttps",
+      "domain": "transport",
+      "risk_class": "blockchain",
+      "role": "remote-mcp-node",
+      "integration": "SHTTPS/STCP",
+      "enabled": true,
+      "rpc_allow": []
+    }
+  ],
+  "control_principals": [
+    {
+      "name": "synergy_remote_mcp_controller",
+      "repo": "local://synergy-remote-mcp-controller",
+      "domain": "operations",
+      "risk_class": "blockchain",
+      "role": "mcp-controller",
+      "integration": "MCP-stdio-to-SHTTPS",
+      "enabled": true,
+      "rpc_allow": [
+        "synergy.remote.mcp.v1.health",
+        "synergy.remote.mcp.v1.list_dir",
+        "synergy.remote.mcp.v1.read_file",
+        "synergy.remote.mcp.v1.run"
+      ]
+    }
+  ]
+}

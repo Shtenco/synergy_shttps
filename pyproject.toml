@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shttps"
+version = "0.1.0"
+description = "SYNERGY post-quantum secure compressed transport/session protocol"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=46"]
+
+[project.scripts]
+shttps-diagnose = "shttps.diagnostics:main"
+shttps-federation = "shttps.federation_cli:main"
+shttps-federation-rotate-due = "shttps.federation_rotate_due_cli:main"
+shttps-federation-delegated = "shttps.delegated_cli:main"
+shttps-hsm-signer = "shttps.hsm_cli:main"
+synergy-mcp-gateway = "shttps.mcp_stdio:main"
+synergy-mcp-http-gateway = "shttps.mcp_http:main"
+synergy-remote-mcp-node = "shttps.remote_mcp_node:main"
+synergy-remote-mcp-smoke = "shttps.remote_mcp_smoke:main"
+
+[project.optional-dependencies]
+pq = ["liboqs-python==0.16.0"]
+hsm = ["python-pkcs11==0.10.0"]
+production = ["liboqs-python==0.16.0", "python-pkcs11==0.10.0"]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shttps*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
