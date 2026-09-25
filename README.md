@@ -19,7 +19,7 @@ The PQ policy is sourced from `Shtenco/synergy_ai_blockchain`, branch `feat/pq-e
 
 ## Compression
 
-SHTTPS integrates **the real `Shtenco/ai_compress` implementation**, pinned to commit `551fae36eacb5713aa503fc9da2fbc44fe8f2e84`:
+SHTTPS integrates **the real `Shtenco/synegy_ai_compress` implementation**, pinned to commit `551fae36eacb5713aa503fc9da2fbc44fe8f2e84`:
 
 - `SGH1-speed`
 - `SGH1-balanced`
