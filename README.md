@@ -1,3 +1,9 @@
+<!-- SCIENTIFIC-V3-2026:START -->
+<img src="assets/readme/scientific-architecture-v3.svg" width="100%" alt="SHTTPS / SECURE APPLICATION TRANSPORT"/>
+
+[Научно-техническое досье V3](docs/SCIENTIFIC_DOSSIER_V3_2026.md). Предыдущая документация сохранена целиком.
+<!-- SCIENTIFIC-V3-2026:END -->
+
 #  SYNERGY SHTTPS
 
 > **Домен:** Infrastructure / Secure Transport  
